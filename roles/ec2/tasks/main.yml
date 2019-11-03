@@ -1,0 +1,93 @@
+#
+# Create EC2 instance
+
+- name: Create instances
+  ec2:
+    region: "{{ ec2.region }}"
+    keypair: "{{ ec2.credentials }}"
+    instance_tags: "{{ ec2.tags }}"
+    image: "{{ ec2.image }}"
+    instance_type: "{{ ec2.instance_type }}"
+    instance_profile_name: "{{ ec2.role | default('') }}"
+    #group: "{{ ec2.sg }}"
+    vpc_subnet_id: "{{ ec2.subnet }}"
+    assign_public_ip: "{{ ec2.public_ip | default('no') }}"
+    private_ip: "{{ ec2.private_ip | default('') }}"
+    group_id: "{{ ec2.security_group }}"
+    wait: true
+  register: ec2
+
+- name: Add new instance to host group
+  add_host:
+    hostname: "{{ item.public_ip }}"
+    groupname: launched
+  loop: "{{ ec2.instances }}"
+
+- name: Wait for SSH to come up
+  delegate_to: "{{ item.public_dns_name }}"
+  wait_for_connection:
+    delay: 60
+    timeout: 320
+  loop: "{{ ec2.instances }}"
+
+- name: install JDK 11
+  apt:
+    name: openjdk-11-jdk
+    state: present
+  loop: "{{ ec2.instances }}"
+
+- name: add tomcat group
+  group:
+    name: tomcat
+  loop: "{{ ec2.instances }}"
+
+- name: add tomcat user
+  user:
+    name: tomcat
+    group: tomcat
+    home: /user/share/tomcat
+    createhome: no
+  loop: "{{ ec2.instances }}"
+
+- name: create /opt/tomcat directory
+  file:
+     path: /opt/tomcat
+     state: directory
+     mode: 0755
+  loop: "{{ ec2.instances }}"
+
+- name: download & unarchive
+  unarchive:
+    src: http://apache.cs.utah.edu/tomcat/tomcat-9/v9.0.16/bin/apache-tomcat-9.0.16.tar.gz
+    dest: /opt/tomcat
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+  loop: "{{ ec2.instances }}"
+
+- name: Change ownership
+  file:
+    path: /opt/tomcat
+    owner: tomcat
+    group: tomcat
+    mode: "u+rwx,g+rx,o=rx"
+    recurse: yes
+    state: directory
+  loop: "{{ ec2.instances }}"
+
+- name: Copy Tomcat service from local to remote
+  copy:
+     src: tomcat.service
+     dest: /etc/systemd/system/
+     mode: 0755
+  loop: "{{ ec2.instances }}"
+
+- name: Start and enable Tomcat service
+  systemd:
+    name: tomcat
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop: "{{ ec2.instances }}"
+- name: Set timezone to Asia/Tokyo
+  timezone:
+    name: "{{ timezone }}"
